@@ -64,6 +64,37 @@ def gen_step(dt: str, n_customers: int, n_applications: int, stream: int):
     return _fn
 
 
+def _remove_tree(target: Path) -> None:
+    """逐文件 unlink + 逆序 rmdir（Windows 下 rmtree 遇占用会失败）。"""
+    for f in target.rglob("*"):
+        if f.is_file():
+            f.unlink()
+    for d in sorted((p for p in target.rglob("*") if p.is_dir()), reverse=True):
+        d.rmdir()
+    target.rmdir()
+
+
+def _reset_stream_state(paths) -> None:
+    """测试隔离：清理实时链路状态（checkpoint + 输出表 + landing 落地文件）。
+
+    否则重跑时 landing 文件同名（batch_{dt}_{seq}.json 覆盖写），
+    availableNow 触发会把它们当作"已处理"跳过，实时侧只剩旧数据，
+    流批对账必失败——测试须从干净状态重放。
+    """
+    for target in (
+        Path(paths.warehouse_root, "ads", "_checkpoints", "realtime_metrics"),
+        Path(paths.ads("ads_realtime_metrics")),
+    ):
+        if target.exists():
+            _remove_tree(target)
+            print(f"[isolation] removed {target}")
+    landing = Path(paths.landing_dir, "repay_stream")
+    if landing.is_dir():
+        for f in landing.glob("batch_*.json"):
+            f.unlink()
+        print(f"[isolation] cleared landing batches: {landing}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="端到端冒烟测试")
     parser.add_argument("--keep-going", action="store_true")
@@ -81,6 +112,9 @@ def main() -> None:
 
     cfg = load_config()
     paths = Paths.from_config(cfg)
+
+    # 测试隔离：清理实时链路状态，保证重跑确定（见 _reset_stream_state 说明）
+    _reset_stream_state(paths)
 
     d2 = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
     d1 = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")

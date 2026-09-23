@@ -82,8 +82,10 @@ FastAPI 数据服务、列级血缘与 Schema 漂移检测、Airflow 每日调�
 ├── scripts/
 │   ├── infra_up.sh               # Kafka + Flink 一键启停
 │   ├── flink_submit.sh           # Flink SQL 作业提交（含 Windows 适配）
-│   └── run_local.sh              # 单业务日全链路（无集群版）
+│   ├── run_local.sh              # 单业务日全链路（无集群版）
+│   └── run_realtime_demo.sh      # 单业务日全链路（Kafka+Flink 真实时链路版）
 ├── docs/lineage.md               # 自动生成的血缘图
+├── docs/run-results/             # 试运行结果效果图（含 README 索引）
 └── warehouse/                    # 数仓存储（parquet，本地模拟 HDFS）
 ```
 
@@ -114,6 +116,12 @@ python -m data.generator --dt 2026-09-22 --sink kafka   # 生产数据进 Kafka
 python -m quality.reconcile --dt 2026-09-22             # 流批对账
 ```
 
+一键复现完整演示（等价 Airflow DAG 手动序列，产出 `docs/run-results/` 同款结果）：
+
+```bash
+bash scripts/run_realtime_demo.sh 2026-09-23   # 复跑加 SKIP_PRODUCE=1（topic 已有当日消息）
+```
+
 看板与服务：
 
 ```bash
@@ -142,11 +150,22 @@ filesystem JSON / Kafka 双 sink）与离线 T+1 双跑，`quality/reconcile.py`
 **Kafka/Flink 工程细节**（README 里保留踩坑记录，面试可讲）：
 - 两个 INSERT 作业必须用**不同 group.id**，否则同一消费者组把 topic 分区
   分家，每个作业只拿到部分数据（实测踩坑）；
+- 实时作业用 `scan.bounded.mode = 'latest-offset'`（等价 availableNow）：消费
+  到启动位点后作业 FINISHED、窗口全部触发、结果可复现；无界模式下本地演示
+  无法判定"何时算消费完"，sink 会停在部分数据上；
 - Flink 官方 .sh 在 Git Bash 下 classpath 分隔符不转换（manglePathList 只认
   CYGWIN），本项目用等价 java 命令直启 JM/TM/SqlClient；
 - Windows 下 TM 工作目录名 `tm_localhost:端口` 含冒号是非法文件名，需
   `taskmanager.resource-id` 覆盖；内存组件路径要求每个键显式存在；
-- 取消作业要确认 0 running 再提交——残留作业的共享消费者组会陷入重平衡死锁。
+- 取消作业要确认 0 running 再提交——残留作业的共享消费者组会陷入重平衡死锁；
+- `curl -o /dev/null` 在 `MSYS2_ARG_CONV_EXCL="*"` 下参数不转换，Windows curl
+  写 POSIX `/dev/null` 失败并返回非零——集群在线却误判未就绪（实测踩坑），
+  探测一律改成 shell 重定向 `> /dev/null`；
+- **Kafka topic 追加累积**：跨会话对同一 dt 重复生产会让消息翻倍、窗口聚合
+  与对账口径失真；Windows 上删除 topic 还可能因文件占用 rename 失败
+  （AccessDenied）触发 broker 判定日志目录 failed 直接退出，恢复方式：
+  清掉已删除 topic 的残留目录后重启 broker（元数据已删、目录成了 stray）。
+  复跑请换新 dt 或先重置 topic（`run_realtime_demo.sh` 支持 `SKIP_PRODUCE=1`）。
 
 **数据质量**：主键唯一率、关键列空值率、行数波动（对照台账）三类规则 +
 行数台账；失败即退出码非零，Airflow 任务标红并阻断下游。
@@ -169,12 +188,22 @@ rename 上位），输出前后对比报告。
 
 ## 实测结果（2026-09-23，Windows + PySpark 4.2.0 + Java 17 + Kafka 3.9.2 + Flink 1.20）
 
-- 冒烟测试：**17 个步骤全部 PASS**（两业务日：gen→ods→dwd→dws→ads→streaming→quality→reconcile + 快照链 + Schema 校验）
-- 流批对账：repay_amt 偏差 **0.0%**、repay_cnt 偏差 0.65%（容差 1% 内）
-- TableStore：两业务日快照链 60 → 61 行（漂移客户正确关闭旧版本 + 插入新版本）
-- Schema 校验：**11/11 表 PASS**
-- Kafka→Flink 全链路：topic 482 条消息全部消费，窗口聚合落 filesystem sink + 回写 Kafka topic
-- FastAPI 四个端点全部验证通过；Streamlit 看板 HTTP 200
+效果图见 [`docs/run-results/`](docs/run-results/)（11 张：冒烟测试、实时链路全流程、对账、
+质量、Kafka 证据、数据服务、治理、小文件治理 + Flink WebUI / Streamlit 看板 / Swagger）。
+
+- 冒烟测试：**19 个步骤全部 PASS**（两业务日 2000 客户 / 5000 申请：gen→ods→dwd→dws→ads→
+  streaming→quality→reconcile + 快照链 + Schema 校验）
+- 流批对账：repay_cnt / repay_amt 相对偏差均 **0.0%**（Flink filesystem sink 3557 条消息
+  全量消费，容差 1%）
+- 数据质量：9 张表 × 3 类规则（主键唯一率 / 空值率 / 行数波动）全部 PASS
+- TableStore：快照链 11 个（拉链表每日 merge_upsert 增量，属性漂移客户关闭旧版本 + 插入新版本）
+- Schema 校验：**11/11 表 PASS**（parquet footer 直比，不起 Spark）
+- Kafka→Flink 全链路：3557 条消息有界消费，聚合出 1295 个 1min 窗口落 filesystem sink，
+  同时回写 Kafka topic（既做源也做 sink）
+- 数据倾斜：95% 流量集中 100 热点客户，加盐两阶段聚合把 task 耗时 max 从 76ms 压到 51ms
+  （median 60ms → 37ms）
+- 小文件治理：构造 8 个小文件（0.023MB/个）→ 合并为 1 个（0.138MB），原子替换
+- FastAPI 四个端点全部验证通过；Streamlit 看板（离线日报 + Flink 实时两栏）正常渲染
 
 ## 与生产环境的差异（诚实声明）
 

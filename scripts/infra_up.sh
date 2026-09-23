@@ -29,7 +29,9 @@ cmd /c mklink /J C:\flink "$(cygpath -w "$FLINK_HOME" 2>/dev/null || echo "$FLIN
 wait_port() {
     local port=$1 name=$2
     for i in $(seq 1 40); do
-        if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:$port" 2>/dev/null \
+        # 用 shell 重定向探测，不用 curl -o /dev/null：MSYS2_ARG_CONV_EXCL="*"
+        # 下 -o 参数不转换，Windows curl 写 POSIX /dev/null 必失败（实测踩坑）
+        if curl -s --max-time 2 "http://127.0.0.1:$port" > /dev/null 2>&1 \
            || python -c "import socket;s=socket.socket();s.settimeout(1);s.connect(('127.0.0.1',$port));s.close()" 2>/dev/null; then
             echo "[infra] $name is up (port $port)"
             return 0

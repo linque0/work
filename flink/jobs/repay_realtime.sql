@@ -9,7 +9,10 @@
 SET 'execution.attached' = 'false';
 
 -- ---------- ODS：Kafka 原始流 ----------
-CREATE TABLE IF NOT EXISTS repay_stream (
+-- 关键设计：两个 INSERT 作业（fs sink / kafka sink）必须使用不同 group.id。
+-- 同一消费者组会把 topic 分区分配给组内多个消费者，每个作业只拿到部分
+-- 分区（实测踩坑：fs sink 丢数据、流批对账必挂），故按 sink 拆两个源表。
+CREATE TABLE IF NOT EXISTS repay_stream_fs (
     flow_id        STRING,
     application_id STRING,
     customer_id    STRING,
@@ -22,8 +25,32 @@ CREATE TABLE IF NOT EXISTS repay_stream (
     'connector'                    = 'kafka',
     'topic'                        = 'repay_stream',
     'properties.bootstrap.servers' = 'localhost:9092',
-    'properties.group.id'          = 'flink-repay-dw',
+    'properties.group.id'          = 'flink-repay-dw-fs',
     'scan.startup.mode'            = 'earliest-offset',
+    -- 有界读取：消费到启动时的最新位点后作业自然结束（等价 availableNow），
+    -- 窗口全部触发、结果完整可复现；生产环境改回无界流 + checkpoint 常驻
+    'scan.bounded.mode'            = 'latest-offset',
+    'format'                       = 'json',
+    'json.ignore-parse-errors'     = 'true'
+);
+
+CREATE TABLE IF NOT EXISTS repay_stream_kafka (
+    flow_id        STRING,
+    application_id STRING,
+    customer_id    STRING,
+    event_time     TIMESTAMP(3),
+    repay_amount   DOUBLE,
+    overdue_days   INT,
+    WATERMARK FOR event_time AS event_time - INTERVAL '10' SECOND
+) WITH (
+    'connector'                    = 'kafka',
+    'topic'                        = 'repay_stream',
+    'properties.bootstrap.servers' = 'localhost:9092',
+    'properties.group.id'          = 'flink-repay-dw-kafka',
+    'scan.startup.mode'            = 'earliest-offset',
+    -- 有界读取：消费到启动时的最新位点后作业自然结束（等价 availableNow），
+    -- 窗口全部触发、结果完整可复现；生产环境改回无界流 + checkpoint 常驻
+    'scan.bounded.mode'            = 'latest-offset',
     'format'                       = 'json',
     'json.ignore-parse-errors'     = 'true'
 );
@@ -70,7 +97,7 @@ SELECT
     SUM(CASE WHEN overdue_days > 0 THEN 1 ELSE 0 END)               AS overdue_cnt,
     ROUND(SUM(CASE WHEN overdue_days > 0 THEN repay_amount ELSE 0 END), 2) AS overdue_amt_sum
 FROM TABLE(
-    TUMBLE(TABLE repay_stream, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
+    TUMBLE(TABLE repay_stream_fs, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
 )
 GROUP BY window_start, window_end;
 
@@ -83,6 +110,6 @@ SELECT
     SUM(CASE WHEN overdue_days > 0 THEN 1 ELSE 0 END)               AS overdue_cnt,
     ROUND(SUM(CASE WHEN overdue_days > 0 THEN repay_amount ELSE 0 END), 2) AS overdue_amt_sum
 FROM TABLE(
-    TUMBLE(TABLE repay_stream, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
+    TUMBLE(TABLE repay_stream_kafka, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
 )
 GROUP BY window_start, window_end;

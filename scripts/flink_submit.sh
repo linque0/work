@@ -14,8 +14,11 @@ FLINK_HOME="${FLINK_HOME:-C:/flink}"
 FLINK_CONF="$FLINK_HOME/conf"
 
 # 集群未启动（无 FLINK_HOME 或 REST 8081 无响应）时安静跳过，退出码 0——
-# 让 Airflow DAG 在没有 Flink 的环境也能跑完其余环节
-if [ ! -d "$FLINK_HOME/lib" ] || ! curl -s --max-time 3 -o /dev/null http://localhost:8081/config 2>/dev/null; then
+# 让 Airflow DAG 在没有 Flink 的环境也能跑完其余环节。
+# 注意：探测用 shell 重定向到 /dev/null，不能用 curl -o /dev/null——
+# MSYS2_ARG_CONV_EXCL="*" 下该参数不转换，Windows curl 写 POSIX /dev/null
+# 会失败并返回非零，导致集群明明在线却误判未就绪（实测踩坑）。
+if [ ! -d "$FLINK_HOME/lib" ] || ! curl -s --max-time 3 http://localhost:8081/config > /dev/null 2>&1; then
     echo "[flink] 集群未就绪（$FLINK_HOME 或 localhost:8081），跳过提交"
     exit 0
 fi
