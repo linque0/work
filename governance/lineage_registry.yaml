@@ -1,0 +1,225 @@
+# 列级血缘注册表（数据治理的单一事实来源）
+#
+# 约定：
+# - 每张表声明 layer / 路径模式 / 列定义；列的 from 字段描述列级血缘
+#   （源表.列 或加工表达式），用于影响分析、口径追溯与 schema 漂移检测；
+# - validate_schema.py 拿本文件与实际 parquet 结构比对；
+# - render_lineage.py 从本文件渲染 mermaid 血缘图。
+
+version: 1
+
+tables:
+  # ------------------------------------------------------------ ODS
+  ods.customer:
+    layer: ods
+    path: warehouse/ods/customer/dt={dt}
+    description: 客户全量快照（业务库每日导出）
+    columns:
+      customer_id: {type: string, from: "业务库 customer.customer_id"}
+      customer_name: {type: string, from: "业务库 customer.customer_name"}
+      gender: {type: string, from: "业务库 customer.gender"}
+      age: {type: int, from: "业务库 customer.age"}
+      education: {type: string, from: "业务库 customer.education"}
+      marital_status: {type: string, from: "业务库 customer.marital_status"}
+      occupation: {type: string, from: "业务库 customer.occupation"}
+      city: {type: string, from: "业务库 customer.city"}
+      register_date: {type: string, from: "业务库 customer.register_date"}
+      etl_time: {type: timestamp, from: "ETL 审计字段 current_timestamp()"}
+      source_file: {type: string, from: "ETL 审计字段（来源文件标识）"}
+
+  ods.loan_application:
+    layer: ods
+    path: warehouse/ods/loan_application/dt={dt}
+    description: 贷款申请表（业务库每日导出）
+    columns:
+      application_id: {type: string, from: "业务库 loan_application.application_id"}
+      customer_id: {type: string, from: "业务库 loan_application.customer_id"}
+      apply_time: {type: timestamp, from: "业务库 loan_application.apply_time"}
+      loan_amnt: {type: double, from: "业务库 loan_application.loan_amnt"}
+      term: {type: int, from: "业务库 loan_application.term"}
+      interest_rate: {type: double, from: "业务库 loan_application.interest_rate"}
+      purpose: {type: string, from: "业务库 loan_application.purpose"}
+      grade: {type: string, from: "业务库 loan_application.grade"}
+      annual_income: {type: double, from: "业务库 loan_application.annual_income"}
+      dti: {type: double, from: "业务库 loan_application.dti"}
+      fico_score: {type: int, from: "业务库 loan_application.fico_score"}
+      verification_status: {type: string, from: "业务库 loan_application.verification_status"}
+      home_ownership: {type: string, from: "业务库 loan_application.home_ownership"}
+      is_approved: {type: int, from: "业务库 loan_application.is_approved"}
+      is_default: {type: int, from: "业务库 loan_application.is_default"}
+      etl_time: {type: timestamp, from: "ETL 审计字段 current_timestamp()"}
+      source_file: {type: string, from: "ETL 审计字段（来源文件标识）"}
+
+  ods.repay_flow:
+    layer: ods
+    path: warehouse/ods/repay_flow/dt={dt}
+    description: 还款流水表（业务库每日导出）
+    columns:
+      flow_id: {type: string, from: "业务库 repay_flow.flow_id"}
+      application_id: {type: string, from: "业务库 repay_flow.application_id"}
+      customer_id: {type: string, from: "业务库 repay_flow.customer_id"}
+      due_date: {type: string, from: "业务库 repay_flow.due_date"}
+      repay_time: {type: timestamp, from: "业务库 repay_flow.repay_time"}
+      due_amount: {type: double, from: "业务库 repay_flow.due_amount"}
+      repay_amount: {type: double, from: "业务库 repay_flow.repay_amount"}
+      overdue_days: {type: int, from: "业务库 repay_flow.overdue_days"}
+      etl_time: {type: timestamp, from: "ETL 审计字段 current_timestamp()"}
+      source_file: {type: string, from: "ETL 审计字段（来源文件标识）"}
+
+  # ------------------------------------------------------------ DWD
+  dwd.dwd_dim_customer:
+    layer: dwd
+    path: warehouse/tables/dwd_dim_customer/snapshots/{snapshot}/data
+    description: 客户维度拉链表（SCD2，TableStore 快照链管理）
+    columns:
+      customer_id: {type: string, from: "ods.customer.customer_id"}
+      customer_sk: {type: long, from: "xxhash64(customer_id, start_date) 代理键"}
+      gender: {type: string, from: "ods.customer.gender"}
+      age: {type: int, from: "ods.customer.age"}
+      education: {type: string, from: "ods.customer.education"}
+      marital_status: {type: string, from: "ods.customer.marital_status"}
+      occupation: {type: string, from: "ods.customer.occupation"}
+      city: {type: string, from: "ods.customer.city"}
+      start_date: {type: string, from: "版本生效日（首次加载或属性变更日）"}
+      end_date: {type: string, from: "版本失效日（9999-12-31 为当前版本）"}
+
+  dwd.dwd_fact_loan_apply:
+    layer: dwd
+    path: warehouse/dwd/dwd_fact_loan_apply/dt={dt}
+    description: 贷款申请事实表（申请粒度）
+    columns:
+      application_id: {type: string, from: "ods.loan_application.application_id"}
+      customer_id: {type: string, from: "ods.loan_application.customer_id"}
+      customer_sk: {type: long, from: "dwd.dwd_dim_customer.customer_sk（按 apply_date 关联当时有效版本）"}
+      apply_time: {type: timestamp, from: "ods.loan_application.apply_time"}
+      apply_date: {type: date, from: "to_date(apply_time) 分区键"}
+      loan_amnt: {type: double, from: "ods.loan_application.loan_amnt"}
+      term: {type: int, from: "ods.loan_application.term"}
+      interest_rate: {type: double, from: "ods.loan_application.interest_rate"}
+      purpose: {type: string, from: "ods.loan_application.purpose"}
+      grade: {type: string, from: "ods.loan_application.grade"}
+      annual_income: {type: double, from: "ods.loan_application.annual_income"}
+      dti: {type: double, from: "ods.loan_application.dti"}
+      fico_score: {type: int, from: "ods.loan_application.fico_score"}
+      verification_status: {type: string, from: "ods.loan_application.verification_status"}
+      home_ownership: {type: string, from: "ods.loan_application.home_ownership"}
+      is_approved: {type: int, from: "ods.loan_application.is_approved"}
+      is_default: {type: int, from: "ods.loan_application.is_default"}
+
+  dwd.dwd_fact_repay:
+    layer: dwd
+    path: warehouse/dwd/dwd_fact_repay/dt={dt}
+    description: 还款流水事实表（还款粒度，含逾期分桶）
+    columns:
+      flow_id: {type: string, from: "ods.repay_flow.flow_id"}
+      application_id: {type: string, from: "ods.repay_flow.application_id"}
+      customer_id: {type: string, from: "ods.repay_flow.customer_id"}
+      customer_sk: {type: long, from: "dwd.dwd_dim_customer.customer_sk（按 repay_time 关联）"}
+      due_date: {type: string, from: "ods.repay_flow.due_date"}
+      repay_time: {type: timestamp, from: "ods.repay_flow.repay_time"}
+      due_amount: {type: double, from: "ods.repay_flow.due_amount"}
+      repay_amount: {type: double, from: "ods.repay_flow.repay_amount"}
+      overdue_days: {type: int, from: "ods.repay_flow.overdue_days"}
+      overdue_bucket: {type: string, from: "CASE WHEN overdue_days 分桶 M0/M1/M2/M3+"}
+      unpaid_amount: {type: double, from: "due_amount - repay_amount 衍生"}
+
+  # ------------------------------------------------------------ DWS
+  dws.dws_apply_day:
+    layer: dws
+    path: warehouse/dws/dws_apply_day/dt={dt}
+    description: 申请域按日汇总（轻度汇总，多 ADS 复用）
+    columns:
+      apply_date: {type: date, from: "dwd.dwd_fact_loan_apply.apply_date 分组键"}
+      apply_cnt: {type: long, from: "count(*) 按日"}
+      approve_cnt: {type: long, from: "sum(is_approved=1)"}
+      approve_rate: {type: double, from: "approve_cnt / apply_cnt"}
+      loan_amt_sum: {type: double, from: "sum(loan_amnt where approved)"}
+      avg_interest_rate: {type: double, from: "avg(interest_rate)"}
+      avg_annual_income: {type: double, from: "avg(annual_income)"}
+      avg_dti: {type: double, from: "avg(dti)"}
+      default_cnt: {type: long, from: "sum(is_default where approved)"}
+      default_rate: {type: double, from: "default_cnt / approve_cnt"}
+      apply_customer_cnt: {type: long, from: "count(distinct customer_id)"}
+
+  dws.dws_customer_day:
+    layer: dws
+    path: warehouse/dws/dws_customer_day/dt={dt}
+    description: 客户×日期累计口径（截至当日）
+    columns:
+      customer_id: {type: string, from: "dwd.dwd_fact_loan_apply.customer_id 分组键"}
+      hist_apply_cnt: {type: long, from: "count(*) 历史申请（apply_date <= dt）"}
+      hist_approve_cnt: {type: long, from: "sum(is_approved=1) 历史"}
+      hist_loan_amt: {type: double, from: "sum(loan_amnt) 历史放款"}
+      hist_repay_cnt: {type: long, from: "count(*) 历史还款（repay_time <= dt）"}
+      hist_repay_amt: {type: double, from: "sum(repay_amount) 历史"}
+      hist_overdue_cnt: {type: long, from: "sum(overdue_days>0) 历史逾期笔数"}
+      last_apply_date: {type: date, from: "max(apply_date)"}
+      last_repay_date: {type: date, from: "max(repay_time)"}
+      dt: {type: string, from: "业务日期分区"}
+      overdue_ratio: {type: double, from: "hist_overdue_cnt / hist_repay_cnt"}
+
+  # ------------------------------------------------------------ ADS
+  ads.ads_risk_daily:
+    layer: ads
+    path: warehouse/ads/ads_risk_daily
+    description: 风控日报（BI/看板消费）
+    columns:
+      apply_date: {type: date, from: "dws.dws_apply_day.apply_date"}
+      apply_cnt: {type: long, from: "dws.dws_apply_day.apply_cnt"}
+      approve_cnt: {type: long, from: "dws.dws_apply_day.approve_cnt"}
+      approve_rate: {type: double, from: "dws.dws_apply_day.approve_rate"}
+      loan_amt_sum: {type: double, from: "dws.dws_apply_day.loan_amt_sum"}
+      avg_interest_rate: {type: double, from: "dws.dws_apply_day.avg_interest_rate"}
+      default_cnt: {type: long, from: "dws.dws_apply_day.default_cnt"}
+      default_rate: {type: double, from: "dws.dws_apply_day.default_rate"}
+      apply_cnt_7d: {type: long, from: "窗口函数 sum(apply_cnt) over 7 日滚动"}
+      loan_amt_7d: {type: double, from: "窗口函数 sum(loan_amt_sum) over 7 日滚动"}
+      apply_cnt_dod: {type: double, from: "lag(apply_cnt,1) 日环比"}
+      etl_time: {type: timestamp, from: "ETL 审计字段"}
+
+  ads.ads_scorecard_features:
+    layer: ads
+    path: warehouse/ads/ads_scorecard_features/dt={dt}
+    description: 评分卡特征宽表（算法训练消费）
+    columns:
+      application_id: {type: string, from: "dwd.dwd_fact_loan_apply.application_id"}
+      customer_id: {type: string, from: "dwd.dwd_fact_loan_apply.customer_id"}
+      customer_sk: {type: long, from: "dwd.dwd_fact_loan_apply.customer_sk"}
+      apply_date: {type: date, from: "dwd.dwd_fact_loan_apply.apply_date"}
+      loan_amnt: {type: double, from: "dwd.dwd_fact_loan_apply.loan_amnt"}
+      term: {type: int, from: "dwd.dwd_fact_loan_apply.term"}
+      interest_rate: {type: double, from: "dwd.dwd_fact_loan_apply.interest_rate"}
+      purpose: {type: string, from: "dwd.dwd_fact_loan_apply.purpose"}
+      grade: {type: string, from: "dwd.dwd_fact_loan_apply.grade"}
+      annual_income: {type: double, from: "dwd.dwd_fact_loan_apply.annual_income"}
+      dti: {type: double, from: "dwd.dwd_fact_loan_apply.dti"}
+      fico_score: {type: int, from: "dwd.dwd_fact_loan_apply.fico_score"}
+      verification_status: {type: string, from: "dwd.dwd_fact_loan_apply.verification_status"}
+      home_ownership: {type: string, from: "dwd.dwd_fact_loan_apply.home_ownership"}
+      is_approved: {type: int, from: "dwd.dwd_fact_loan_apply.is_approved"}
+      label: {type: int, from: "dwd.dwd_fact_loan_apply.is_default（违约标签）"}
+      installment: {type: double, from: "衍生：loan_amnt / term"}
+      monthly_income: {type: double, from: "衍生：annual_income / 12"}
+      loan_to_income: {type: double, from: "衍生：loan_amnt / annual_income"}
+      hist_apply_cnt: {type: long, from: "dws.dws_customer_day.hist_apply_cnt"}
+      hist_approve_cnt: {type: long, from: "dws.dws_customer_day.hist_approve_cnt"}
+      hist_loan_amt: {type: double, from: "dws.dws_customer_day.hist_loan_amt"}
+      hist_overdue_cnt: {type: long, from: "dws.dws_customer_day.hist_overdue_cnt"}
+      hist_overdue_ratio: {type: double, from: "dws.dws_customer_day.overdue_ratio"}
+      hist_repay_cnt: {type: long, from: "dws.dws_customer_day.hist_repay_cnt"}
+
+  # ------------------------------------------------------------ 实时链路
+  flink.repay_metrics_fs:
+    layer: ads
+    path: warehouse/ads/flink_repay_metrics
+    description: 实时还款指标（Flink SQL，1 分钟窗口，filesystem sink）
+    format: json
+    optional: true   # 实时链路未启动时（如纯离线冒烟测试）跳过而非判失败
+    source: kafka://repay_stream
+    columns:
+      window_start: {type: timestamp, from: "TUMBLE 窗口起始（event_time）"}
+      window_end: {type: timestamp, from: "TUMBLE 窗口结束"}
+      msg_cnt: {type: long, from: "count(*) 窗口内消息数"}
+      repay_amt_sum: {type: double, from: "sum(repay_amount) 窗口内还款额"}
+      overdue_cnt: {type: long, from: "sum(overdue_days>0) 逾期笔数"}
+      overdue_amt_sum: {type: double, from: "sum(repay_amount where overdue) 逾期金额"}

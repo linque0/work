@@ -1,0 +1,23 @@
+# 数仓产物（本地运行生成，不入库）
+warehouse/
+data/business/
+data/landing/
+
+# 运行产物
+quality/ledger.csv
+quality/quality_report.json
+quality/reconcile_report.json
+quality/compaction_report.json
+quality/schema_drift_report.json
+quality/skew_bench_report.json
+quality/skew_eventlog/
+__pycache__/
+*.pyc
+.tmp/
+
+# 安全扫描审计产物
+.mimosa/
+
+# 系统文件
+.DS_Store
+Thumbs.db

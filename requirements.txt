@@ -1,0 +1,19 @@
+# 核心依赖
+pyspark>=4.0          # Spark 计算引擎（本地 local[*] 模式）
+pandas>=2.0           # 生成器（天池模式）/ 看板 / 服务读数
+pyyaml>=6.0           # 配置解析
+
+# Kafka / Flink 实时链路
+kafka-python>=2.0     # 生成器 Kafka producer
+pyarrow>=14.0         # parquet 读取（服务 / Schema 校验）
+
+# 数据服务（可选）
+fastapi>=0.110
+uvicorn>=0.29
+
+# 看板（可选）
+streamlit>=1.30       # dashboard/app.py
+
+# 调度（可选，需 Python<=3.12；本机 3.14 无法安装 Airflow，
+# DAG 文件仅作为交付物与代码评审用，本地验证用 tests/smoke_test.py）
+# apache-airflow>=2.8

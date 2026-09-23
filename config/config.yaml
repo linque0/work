@@ -1,0 +1,48 @@
+project: credit-dw
+description: 信贷业务流批一体数仓（离线 Spark 四层建模 + 实时 Structured Streaming + 数据质量与流批对账）
+
+storage:
+  # 数仓根目录：本地文件系统模拟 HDFS，目录结构 ods/dwd/dws/ads
+  warehouse_root: warehouse
+  # 业务源数据落地目录（模拟业务库导出）
+  business_root: data/business
+  # 实时流落地目录（模拟 Kafka topic，streaming job 从此处消费）
+  landing_dir: data/landing
+
+source:
+  # synthetic = 本地合成数据；tianchi = 映射真实天池信贷数据集（需配置 csv 路径）
+  mode: synthetic
+  tianchi_csv: "F:/deepseek workplace/素材/学年论文/A1-论文项目/数据/天池/train.csv"
+
+generator:
+  seed: 42
+  n_customers: 2000        # 客户数（全量快照）
+  n_applications: 5000     # 每日贷款申请数
+  stream_batches: 10       # --stream 模式写入的实时批次文件数
+  stream_interval_sec: 2   # 每批间隔（秒）
+
+spark:
+  app_name: credit-dw
+  master: local[*]
+  shuffle_partitions: 8
+  # 是否在 Windows 本地自动配置 hadoop 原生库（winutils.exe/hadoop.dll）
+  windows_native_autoconfig: true
+
+quality:
+  pk_uniqueness_min: 1.0     # 主键唯一率下限
+  max_null_rate: 0.05        # 关键列空值率上限
+  rowcount_volatility: 0.5   # 日环比行数波动告警阈值（相对变化）
+  ledger_file: quality/ledger.csv
+
+reconcile:
+  # 流批对账容差：|实时-离线|/离线 的相对偏差上限
+  tolerance: 0.01
+
+kafka:
+  bootstrap_servers: localhost:9092
+  topic_repay_stream: repay_stream   # 还款事件流（生成器 producer 写入，Flink 消费）
+  topic_repay_dws: repay_dws_1min    # Flink 实时指标回写 topic
+
+flink:
+  # 实时作业 sink 目录名（相对 warehouse_root，Flink filesystem connector 输出）
+  realtime_sink_dir: flink_repay_metrics
